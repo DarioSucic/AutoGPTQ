@@ -10,8 +10,7 @@ logger = getLogger(__name__)
 def quantize(x, scale, zero, maxq):
     if maxq < 0:
         return (x > scale / 2).float() * scale + (x < zero / 2).float() * zero
-    q = torch.clamp(torch.round(x / scale) + zero, 0, maxq)
-    return scale * (q - zero)
+    return x.div(scale).round_().add_(zero).clamp_(0, maxq).sub_(zero).mul_(scale)
 
 
 class Quantizer(nn.Module):
@@ -21,6 +20,7 @@ class Quantizer(nn.Module):
         self.register_buffer('maxq', torch.tensor(0))
         self.register_buffer('scale', torch.zeros(shape))
         self.register_buffer('zero', torch.zeros(shape))
+        self.is_ready = False
 
     def configure(
         self,
@@ -41,7 +41,6 @@ class Quantizer(nn.Module):
 
     def find_params(self, x, weight=False):
         dev = x.device
-        self.maxq = self.maxq.to(dev)
 
         shape = x.shape
         if self.perchannel:
@@ -71,7 +70,7 @@ class Quantizer(nn.Module):
         xmin[tmp] = -1
         xmax[tmp] = +1
 
-        if self.maxq < 0:
+        if self.maxq.item() < 0:
             self.scale = xmax
             self.zero = xmin
         else:
@@ -99,6 +98,9 @@ class Quantizer(nn.Module):
                     best[tmp] = err[tmp]
                     self.scale[tmp] = scale1[tmp]
                     self.zero[tmp] = zero1[tmp]
+
+        self.is_ready = torch.all(self.scale != 0)
+
         if not self.perchannel:
             if weight:
                 tmp = shape[0]
@@ -123,15 +125,9 @@ class Quantizer(nn.Module):
             self.zero = self.zero.unsqueeze(0)
 
     def quantize(self, x):
-        if self.ready():
-            return quantize(x, self.scale, self.zero, self.maxq)
-        return x
+        return quantize(x, self.scale, self.zero, self.maxq.item())
 
     def enabled(self):
-        return self.maxq > 0
-
-    def ready(self):
-        return torch.all(self.scale != 0)
-
+        return self.maxq.item() > 0
 
 __all__ = ["Quantizer"]

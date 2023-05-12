@@ -1,6 +1,6 @@
 import math
 import os
-import time
+from time import perf_counter_ns as pc
 from logging import getLogger
 
 import torch
@@ -62,6 +62,7 @@ class GPTQ:
     def fasterquant(
         self, blocksize=128, percdamp=.01, groupsize=-1, actorder=False
     ):
+        st = pc()
         W = self.layer.weight.data.clone()
         if isinstance(self.layer, nn.Conv2d):
             W = W.flatten(1)
@@ -69,9 +70,7 @@ class GPTQ:
             W = W.t()
         W = W.float()
 
-        tick = time.time()
-
-        if not self.quantizer.ready():
+        if not self.quantizer.is_ready:
             self.quantizer.find_params(W, weight=True)
 
         H = self.H
@@ -96,6 +95,11 @@ class GPTQ:
         H = torch.linalg.cholesky(H, upper=True)
         Hinv = H
 
+        et = pc()
+        logger.info(f'part 1: {et-st:>12,} ns')
+
+        st = pc()
+
         g_idx = []
         scale = []
         zero = []
@@ -117,7 +121,10 @@ class GPTQ:
 
                 if groupsize != -1:
                     if (i1 + i) % groupsize == 0:
+                        # st = pc()
                         self.quantizer.find_params(W[:, (i1 + i):(i1 + i + groupsize)], weight=True)
+                        # et = pc()
+                        # logger.info(f'find params: {et-st:>12,} ns')
 
                     if ((i1 + i) // groupsize) - now_idx == -1:
                         scale.append(self.quantizer.scale)
@@ -126,9 +133,9 @@ class GPTQ:
 
                 q = self.quantizer.quantize(w.unsqueeze(1)).flatten()
                 Q1[:, i] = q
-                Losses1[:, i] = (w - q) ** 2 / d ** 2
+                err1 = w.sub(q).div_(d)
+                Losses1[:, i] = err1.div(d)
 
-                err1 = (w - q) / d
                 W1[:, i:] -= err1.unsqueeze(1).matmul(Hinv1[i, i:].unsqueeze(0))
                 Err1[:, i] = err1
 
@@ -144,7 +151,8 @@ class GPTQ:
                 logger.debug(torch.sum(Losses))
 
         torch.cuda.synchronize()
-        logger.info(f'duration: {(time.time() - tick)}')
+        et = pc()
+        logger.info(f'part 2: {et-st:>12,} ns')
         logger.info(f'avg loss: {torch.sum(Losses).item() / self.nsamples}')
 
         groupsize = groupsize if groupsize != -1 else self.columns
