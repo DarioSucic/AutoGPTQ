@@ -17,7 +17,7 @@ torch.backends.cudnn.allow_tf32 = False
 
 
 class GPTQ:
-    def __init__(self, layer):
+    def __init__(self, layer, hessian_dtype):
         self.layer = layer
         self.dev = self.layer.weight.device
         W = layer.weight.data.clone()
@@ -27,7 +27,7 @@ class GPTQ:
             W = W.t()
         self.rows = W.shape[0]
         self.columns = W.shape[1]
-        self.H = torch.zeros((self.columns, self.columns), device=self.dev)
+        self.H = torch.zeros((self.columns, self.columns), device=self.dev, dtype=hessian_dtype)
         self.nsamples = 0
         self.quantizer = Quantizer()
 
@@ -55,20 +55,20 @@ class GPTQ:
         self.H *= self.nsamples / (self.nsamples + tmp)
         self.nsamples += tmp
         # inp = inp.float()
-        inp = math.sqrt(2 / self.nsamples) * inp.float()
+        inp = math.sqrt(2 / self.nsamples) * inp.to(self.H.dtype)
         # self.H += 2 / self.nsamples * inp.matmul(inp.t())
-        self.H += inp.matmul(inp.t())
+        self.H += inp @ inp.T
 
     def fasterquant(
         self, blocksize=128, percdamp=.01, groupsize=-1, actorder=False
     ):
         st = pc()
-        W = self.layer.weight.data.clone()
+        W = self.layer.weight.data
         if isinstance(self.layer, nn.Conv2d):
             W = W.flatten(1)
         if isinstance(self.layer, transformers.Conv1D):
             W = W.t()
-        W = W.float()
+        W = W.to(torch.float32)
 
         if not self.quantizer.is_ready:
             self.quantizer.find_params(W, weight=True)
@@ -93,7 +93,7 @@ class GPTQ:
         H = torch.linalg.cholesky(H)
         H = torch.cholesky_inverse(H)
         H = torch.linalg.cholesky(H, upper=True)
-        Hinv = H
+        Hinv = H.to(torch.float32)
 
         et = pc()
         logger.info(f'part 1: {et-st:>12,} ns')
@@ -114,6 +114,8 @@ class GPTQ:
             Err1 = torch.zeros_like(W1)
             Losses1 = torch.zeros_like(W1)
             Hinv1 = Hinv[i1:i2, i1:i2]
+
+            # Optimize this to use vectorized operations
 
             for i in range(count):
                 w = W1[:, i]

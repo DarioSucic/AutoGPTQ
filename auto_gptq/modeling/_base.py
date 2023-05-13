@@ -31,6 +31,7 @@ class BaseQuantizeConfig(PushToHubMixin):
     desc_act: bool = field(default=True)
     sym: bool = field(default=True)
     true_sequential: bool = field(default=True)
+    hessian_dtype: torch.dtype = field(default=torch.float32)
 
     def __post_init__(self):
         fields_info = fields(self)
@@ -39,7 +40,7 @@ class BaseQuantizeConfig(PushToHubMixin):
             raise ValueError(f"only support quantize to {fields_info[0].metadata['choices']} bits.")
         if self.group_size != -1 and self.group_size <= 0:
             raise ValueError("unless equal to -1, group_size must greater then 0.")
-        if not (0 < self.damp_percent < 1):
+        if not (0 <= self.damp_percent < 1):
             raise ValueError("damp_percent must between 0 and 1.")
 
     def save_pretrained(self, save_dir: str, **kwargs):
@@ -257,7 +258,7 @@ class BaseGPTQForCausalLM(nn.Module, PushToHubMixin):
                 subset = {n: full[n] for n in names}
                 gptq = {}
                 for name in subset:
-                    gptq[name] = GPTQ(subset[name])
+                    gptq[name] = GPTQ(subset[name], self.quantize_config.hessian_dtype)
                     gptq[name].quantizer.configure(
                         self.quantize_config.bits,
                         perchannel=True,
