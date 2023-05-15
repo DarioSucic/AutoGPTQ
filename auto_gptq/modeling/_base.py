@@ -428,7 +428,9 @@ class BaseGPTQForCausalLM(nn.Module, PushToHubMixin):
             raise TypeError(f"{config.model_type} isn't supported yet.")
 
         # enforce some values despite user specified
-        model_init_kwargs["torch_dtype"] = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
+        if not model_init_kwargs.get("torch_dtype"):
+            model_init_kwargs["torch_dtype"] = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
+
         model_init_kwargs["trust_remote_code"] = True
         if max_memory:
             if "disk" in max_memory:
