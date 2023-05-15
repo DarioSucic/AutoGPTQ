@@ -77,7 +77,7 @@ class QuantLinear(nn.Module):
             self.quant_cuda_available = False
 
     def pack(self, linear, scales, zeros, g_idx=None):
-        W = linear.weight.data.clone()
+        W = linear.weight.data
         if isinstance(linear, nn.Conv2d):
             W = W.flatten(1)
         if isinstance(linear, transformers.pytorch_utils.Conv1D):
@@ -92,7 +92,7 @@ class QuantLinear(nn.Module):
         if linear.bias is not None:
             self.bias = linear.bias.clone().half()
 
-        intweight = W.T.clone()
+        intweight = W.T.to(torch.float32, copy=True)
         intweight.add_(scale_zeros[self.g_idx]).div_(self.scales[self.g_idx])
         intweight = intweight.round_().to(torch.int32).numpy().astype(np.uint32)
 
